@@ -4,11 +4,14 @@ import type { Request, Response } from "express";
 import { DEMO_OTP, LOGIN_LOCK_MS, LOGIN_MAX_FAILURES, OTP_MAX_ATTEMPTS, OTP_TTL_MS, REFRESH_TOKEN_DAYS, SUPER_ADMIN_EMAIL } from "../../config/constants";
 import { env } from "../../config/env";
 import { appKindFromRole, clearAuthCookies, readSessionCookies, setAuthCookies, signAccessToken, type AccessPayload } from "../../lib/cookies";
-import { hmacField, randomToken, sha256 } from "../../lib/crypto";
+import { requestContext } from "../../lib/context";
+import { encryptField, hmacField, randomToken, sha256 } from "../../lib/crypto";
+import { isDuplicateKey } from "../../lib/tenantPlugin";
 import { AppError } from "../../lib/errors";
 import { logger } from "../../lib/logger";
 import { maskMobile, normalizeSaudiMobile } from "../../lib/phone";
 import { Company } from "../companies/model";
+import { Driver } from "../drivers/model";
 import { User } from "../users/model";
 import { OtpRequest, RefreshToken } from "./model";
 import { sendSuperAdminCode } from "../../integrations/email/gmail";
@@ -185,16 +188,69 @@ export async function requestOtp(mobileRaw: string) {
   return { message: GENERIC_OTP };
 }
 
-/** Development only: the fixed demo code works for a driver who was given portal access. */
+/** Development only: the fixed demo code opens the portal for the mobile number entered. */
 async function driverForDemoLogin(mobile: string) {
   const mobileHash = hmacField(mobile);
   const existing = await User.findOne({ mobileHash, role: "driver", status: "active" });
-  if (!existing) throw new AppError(401, "INVALID_OTP", "The code is incorrect or expired");
-  const company = await Company.findById(existing.companyId).lean();
-  if (!company || company.status !== "active") {
-    throw new AppError(403, "COMPANY_SUSPENDED", "This company is suspended");
+  if (existing) {
+    const company = await Company.findById(existing.companyId).lean();
+    if (!company || company.status !== "active") {
+      throw new AppError(403, "COMPANY_SUSPENDED", "This company is suspended");
+    }
+    return existing;
   }
-  return existing;
+
+  let company = await Company.findOne({ status: "active" }).sort({ createdAt: 1 });
+  if (!company) {
+    company = await Company.create({
+      name: "Fleet",
+      status: "active",
+      plan: "standard",
+      maxVehicles: 500,
+      smsSenderName: "VMS",
+      smsCredits: 0,
+      driverPasswordLogin: false,
+    });
+  }
+
+  const digits = mobile.replace(/\D/g, "");
+  const iqama = `2${digits.slice(-9).padStart(9, "0")}`;
+  const license = `D${digits.slice(-9).padStart(9, "0")}`;
+  const expiry = new Date();
+  expiry.setFullYear(expiry.getFullYear() + 1);
+
+  try {
+    return await requestContext.run({ companyId: String(company._id) }, async () => {
+      const driver = await Driver.create({
+        name: "Demo Driver",
+        mobileEnc: encryptField(mobile),
+        mobileHash,
+        mobileLast4: mobile.slice(-4),
+        iqamaEnc: encryptField(iqama),
+        iqamaHash: hmacField(iqama),
+        iqamaExpiry: expiry,
+        licenseNumberEnc: encryptField(license),
+        licenseType: "private",
+        licenseExpiry: expiry,
+        status: "active",
+      });
+      return User.create({
+        companyId: company._id,
+        role: "driver",
+        name: "Demo Driver",
+        mobileEnc: encryptField(mobile),
+        mobileHash,
+        mobileLast4: mobile.slice(-4),
+        driverId: driver._id,
+        status: "active",
+      });
+    });
+  } catch (error) {
+    if (!isDuplicateKey(error)) throw error;
+    const again = await User.findOne({ mobileHash, role: "driver", status: "active" });
+    if (!again) throw new AppError(401, "INVALID_OTP", "The code is incorrect or expired");
+    return again;
+  }
 }
 
 export async function verifyOtp(mobileRaw: string, code: string, res: Response) {
