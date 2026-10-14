@@ -3,6 +3,7 @@ import { SUPER_ADMIN_EMAIL } from "../../config/constants";
 import { encryptField, hmacField } from "../../lib/crypto";
 import { AppError, notFound } from "../../lib/errors";
 import { getCtx, requireCompanyId } from "../../lib/context";
+import { assertMobileAvailable } from "../../lib/mobileUnique";
 import { maskMobileLast4, normalizeSaudiMobile } from "../../lib/phone";
 import { AuditLog } from "../audit/model";
 import { hashPassword } from "../auth/service";
@@ -41,6 +42,7 @@ export async function listUsers() {
 export async function createCompanyAdmin(input: { name: string; email: string; password: string; mobile: string }) {
   const companyId = requireCompanyId();
   const mobile = normalizeSaudiMobile(input.mobile);
+  await assertMobileAvailable(mobile);
   const existing = await User.findOne({ email: input.email.toLowerCase() });
   if (existing) throw new AppError(409, "DUPLICATE", "An account with this email already exists");
   const user = await User.create({

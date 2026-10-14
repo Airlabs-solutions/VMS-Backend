@@ -1,5 +1,5 @@
 import { createReadStream } from "node:fs";
-import { access, mkdir, writeFile } from "node:fs/promises";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Response } from "express";
@@ -27,6 +27,15 @@ function detect(buffer: Buffer, originalName: string) {
   if (!ext || BLOCKED_EXT.has(ext)) {
     throw new AppError(400, "INVALID_FILE", "This file type is not allowed. Maximum size is 10 MB.");
   }
+  const audio: Record<string, string> = {
+    webm: "audio/webm",
+    ogg: "audio/ogg",
+    mp3: "audio/mpeg",
+    m4a: "audio/mp4",
+    wav: "audio/wav",
+    aac: "audio/aac",
+  };
+  if (audio[ext]) return { mime: audio[ext], ext };
   return { mime: "application/octet-stream", ext };
 }
 
@@ -50,12 +59,16 @@ export async function saveUpload(file: Express.Multer.File | undefined, moduleNa
   return { id: String(record._id), name: record.name, mime: record.mime, size: record.size };
 }
 
+export function publicFileUrl(id: string) {
+  const exp = Date.now() + 30 * 60 * 1000;
+  const token = `${exp}.${signValue(`${id}.${exp}`)}`;
+  return `/api/v1/files/${id}/download?token=${token}`;
+}
+
 export async function signedUrl(id: string) {
   const file = await FileAsset.findById(id).lean();
   if (!file) throw notFound("File");
-  const exp = Date.now() + 5 * 60 * 1000;
-  const token = `${exp}.${signValue(`${id}.${exp}`)}`;
-  return { url: `/api/v1/files/${id}/download?token=${token}`, expiresAt: new Date(exp).toISOString() };
+  return { url: publicFileUrl(id), mime: file.mime, name: file.name, expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString() };
 }
 
 export function tokenIsValid(id: string, token: string | undefined): boolean {
@@ -66,20 +79,22 @@ export function tokenIsValid(id: string, token: string | undefined): boolean {
   return safeEqual(signature, signValue(`${id}.${exp}`));
 }
 
-export async function streamFile(id: string, res: Response) {
-  if (!Types.ObjectId.isValid(id)) throw notFound("File");
-  const file = await FileAsset.findById(id).setOptions({ skipTenant: true }).lean();
-  if (!file) throw notFound("File");
-  const absolute = path.join(env.STORAGE_LOCAL_DIR, file.key);
-  try {
-    await access(absolute);
-  } catch {
-    throw notFound("File");
-  }
-  const showInline = file.mime.startsWith("image/") || file.mime === "application/pdf";
-  res.setHeader("Content-Type", file.mime);
-  res.setHeader("Content-Disposition", `${showInline ? "inline" : "attachment"}; filename="${file.name.replace(/"/g, "")}"`);
-  const stream = createReadStream(absolute);
+const AUDIO_MIME: Record<string, string> = {
+  ".webm": "audio/webm",
+  ".ogg": "audio/ogg",
+  ".mp3": "audio/mpeg",
+  ".m4a": "audio/mp4",
+  ".wav": "audio/wav",
+  ".aac": "audio/aac",
+};
+
+function playbackMime(mime: string, name: string) {
+  if (mime.startsWith("audio/") || mime.startsWith("image/") || mime === "application/pdf") return mime;
+  return AUDIO_MIME[path.extname(name).toLowerCase()] ?? mime;
+}
+
+function pipeStream(absolute: string, res: Response, start?: number, end?: number) {
+  const stream = createReadStream(absolute, start === undefined ? undefined : { start, end });
   stream.on("error", () => {
     if (!res.headersSent) {
       res.status(404).json({ error: { code: "NOT_FOUND", message: "File was not found" } });
@@ -88,4 +103,42 @@ export async function streamFile(id: string, res: Response) {
     res.destroy();
   });
   stream.pipe(res);
+}
+
+export async function streamFile(id: string, res: Response, rangeHeader?: string) {
+  if (!Types.ObjectId.isValid(id)) throw notFound("File");
+  const file = await FileAsset.findById(id).setOptions({ skipTenant: true }).lean();
+  if (!file) throw notFound("File");
+  const absolute = path.join(env.STORAGE_LOCAL_DIR, file.key);
+  let info;
+  try {
+    info = await stat(absolute);
+  } catch {
+    throw notFound("File");
+  }
+  const mime = playbackMime(file.mime, file.name);
+  const inline = mime.startsWith("image/") || mime.startsWith("audio/") || mime === "application/pdf";
+  res.setHeader("Accept-Ranges", "bytes");
+  res.setHeader("Content-Type", mime);
+  res.setHeader("Content-Disposition", `${inline ? "inline" : "attachment"}; filename="${file.name.replace(/"/g, "")}"`);
+
+  const match = rangeHeader ? /^bytes=(\d*)-(\d*)$/.exec(rangeHeader) : null;
+  if (match && mime.startsWith("audio/")) {
+    const start = match[1] ? Number(match[1]) : 0;
+    const end = match[2] ? Math.min(Number(match[2]), info.size - 1) : info.size - 1;
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= info.size) {
+      res.status(416);
+      res.setHeader("Content-Range", `bytes */${info.size}`);
+      res.end();
+      return;
+    }
+    res.status(206);
+    res.setHeader("Content-Range", `bytes ${start}-${end}/${info.size}`);
+    res.setHeader("Content-Length", String(end - start + 1));
+    pipeStream(absolute, res, start, end);
+    return;
+  }
+
+  res.setHeader("Content-Length", String(info.size));
+  pipeStream(absolute, res);
 }

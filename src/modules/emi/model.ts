@@ -9,6 +9,7 @@ const planSchema = new Schema(
     bank: { type: String, required: true, trim: true },
     loanAmountHalalas: { type: Number, required: true, min: 0 },
     downPaymentHalalas: { type: Number, required: true, min: 0 },
+    interestRate: { type: Number, default: 0, min: 0, max: 100 },
     monthlyAmountHalalas: { type: Number, required: true, min: 0 },
     tenureMonths: { type: Number, required: true, min: 1, max: 120 },
     startDate: { type: Date, required: true },

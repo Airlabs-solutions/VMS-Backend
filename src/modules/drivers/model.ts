@@ -18,6 +18,7 @@ const driverSchema = new Schema(
     licenseExpiry: { type: Date, required: true },
     fileIds: [{ type: Schema.Types.ObjectId, ref: "FileAsset" }],
     photoId: { type: Schema.Types.ObjectId, ref: "FileAsset" },
+    profileVerifiedAt: { type: Date, default: null },
     status: { type: String, enum: ["active", "inactive"], default: "active" },
   },
   { timestamps: true },

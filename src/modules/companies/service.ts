@@ -4,6 +4,7 @@ import { ALERT_DEFAULTS, ALERT_TYPES } from "../../config/constants";
 import { requestContext } from "../../lib/context";
 import { encryptField, hmacField } from "../../lib/crypto";
 import { AppError, notFound } from "../../lib/errors";
+import { assertMobileAvailable } from "../../lib/mobileUnique";
 import { normalizeSaudiMobile } from "../../lib/phone";
 import { hashPassword } from "../auth/service";
 import { AlertRule } from "../alerts/model";
@@ -67,6 +68,7 @@ export async function createCompany(input: {
   admin: { name: string; email: string; password: string; mobile: string };
 }) {
   const mobile = normalizeSaudiMobile(input.admin.mobile);
+  await assertMobileAvailable(mobile);
   const company = await Company.create({
     name: input.name.trim(),
     plan: input.plan?.trim() || "standard",

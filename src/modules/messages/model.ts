@@ -8,6 +8,7 @@ const messageSchema = new Schema(
     senderRole: { type: String, enum: ["admin", "driver"], default: "admin" },
     body: { type: String, default: "", maxlength: 500 },
     fileIds: [{ type: Schema.Types.ObjectId, ref: "FileAsset" }],
+    broadcastId: { type: Schema.Types.ObjectId, default: null },
     readByDriverAt: { type: Date },
   },
   { timestamps: true },
@@ -17,5 +18,6 @@ messageSchema.plugin(tenantPlugin);
 messageSchema.plugin(auditPlugin);
 messageSchema.index({ companyId: 1, createdAt: -1 });
 messageSchema.index({ companyId: 1, driverId: 1, createdAt: 1 });
+messageSchema.index({ companyId: 1, broadcastId: 1, createdAt: -1 });
 
 export const DirectMessage = model("DirectMessage", messageSchema);

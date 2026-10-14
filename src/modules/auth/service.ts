@@ -1,4 +1,4 @@
-import { randomInt } from "node:crypto";
+import { createHash, randomInt } from "node:crypto";
 import bcrypt from "bcryptjs";
 import type { Request, Response } from "express";
 import { DEMO_OTP, LOGIN_LOCK_MS, LOGIN_MAX_FAILURES, OTP_MAX_ATTEMPTS, OTP_TTL_MS, REFRESH_TOKEN_DAYS, SUPER_ADMIN_EMAIL } from "../../config/constants";
@@ -9,6 +9,7 @@ import { encryptField, hmacField, randomToken, sha256 } from "../../lib/crypto";
 import { isDuplicateKey } from "../../lib/tenantPlugin";
 import { AppError } from "../../lib/errors";
 import { logger } from "../../lib/logger";
+import { assertMobileAvailable } from "../../lib/mobileUnique";
 import { maskMobile, normalizeSaudiMobile } from "../../lib/phone";
 import { Company } from "../companies/model";
 import { Driver } from "../drivers/model";
@@ -188,17 +189,65 @@ export async function requestOtp(mobileRaw: string) {
   return { message: GENERIC_OTP };
 }
 
-/** Development only: the fixed demo code opens the portal for the mobile number entered. */
-async function driverForDemoLogin(mobile: string) {
-  const mobileHash = hmacField(mobile);
-  const existing = await User.findOne({ mobileHash, role: "driver", status: "active" });
+/** 10-digit stand-in iqama/license. The value changes per attempt so two mobiles cannot share one. */
+function demoDocumentNumber(mobile: string, kind: string): string {
+  const digest = createHash("sha256").update(`${kind}:${mobile}`).digest();
+  const n = digest.readUInt32BE(0) % 1_000_000_000;
+  return `2${String(n).padStart(9, "0")}`;
+}
+
+async function assertActiveCompany(companyId: unknown) {
+  const company = companyId ? await Company.findById(companyId).lean() : null;
+  if (!company || company.status !== "active") {
+    throw new AppError(403, "COMPANY_SUSPENDED", "This company is suspended");
+  }
+  return company;
+}
+
+/**
+ * Development sign-in for a mobile that already has a driver login, or a driver
+ * record with portal access turned off. Returns null when this number is new.
+ */
+async function existingDemoUser(mobile: string, mobileHash: string) {
+  const existing = await User.findOne({ mobileHash, role: "driver" });
   if (existing) {
-    const company = await Company.findById(existing.companyId).lean();
-    if (!company || company.status !== "active") {
-      throw new AppError(403, "COMPANY_SUSPENDED", "This company is suspended");
+    await assertActiveCompany(existing.companyId);
+    if (existing.status !== "active") {
+      existing.status = "active";
+      await existing.save();
     }
     return existing;
   }
+
+  const driver = await requestContext.run({ internal: true }, () => Driver.findOne({ mobileHash }));
+  if (!driver) return null;
+  const companyId = driver.get("companyId");
+  await assertActiveCompany(companyId);
+  try {
+    return await User.create({
+      companyId,
+      role: "driver",
+      name: driver.name,
+      mobileEnc: driver.mobileEnc,
+      mobileHash,
+      mobileLast4: driver.mobileLast4,
+      driverId: driver._id,
+      status: "active",
+    });
+  } catch (error) {
+    if (!isDuplicateKey(error)) throw error;
+    const again = await User.findOne({ mobileHash, role: "driver" });
+    if (again) return again;
+    throw new AppError(409, "DUPLICATE", "This mobile number is already used by another account");
+  }
+}
+
+/** Development only: the fixed demo code opens the portal for the mobile number entered. */
+async function driverForDemoLogin(mobile: string) {
+  const mobileHash = hmacField(mobile);
+  const ready = await existingDemoUser(mobile, mobileHash);
+  if (ready) return ready;
+  await assertMobileAvailable(mobile);
 
   let company = await Company.findOne({ status: "active" }).sort({ createdAt: 1 });
   if (!company) {
@@ -213,44 +262,45 @@ async function driverForDemoLogin(mobile: string) {
     });
   }
 
-  const digits = mobile.replace(/\D/g, "");
-  const iqama = `2${digits.slice(-9).padStart(9, "0")}`;
-  const license = `D${digits.slice(-9).padStart(9, "0")}`;
   const expiry = new Date();
   expiry.setFullYear(expiry.getFullYear() + 1);
 
-  try {
-    return await requestContext.run({ companyId: String(company._id) }, async () => {
-      const driver = await Driver.create({
-        name: "Demo Driver",
-        mobileEnc: encryptField(mobile),
-        mobileHash,
-        mobileLast4: mobile.slice(-4),
-        iqamaEnc: encryptField(iqama),
-        iqamaHash: hmacField(iqama),
-        iqamaExpiry: expiry,
-        licenseNumberEnc: encryptField(license),
-        licenseType: "private",
-        licenseExpiry: expiry,
-        status: "active",
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const iqama = demoDocumentNumber(mobile, `iqama:${attempt}`);
+    const license = `D${demoDocumentNumber(mobile, `license:${attempt}`).slice(1)}`;
+    try {
+      return await requestContext.run({ companyId: String(company._id) }, async () => {
+        const driver = await Driver.create({
+          name: "Demo Driver",
+          mobileEnc: encryptField(mobile),
+          mobileHash,
+          mobileLast4: mobile.slice(-4),
+          iqamaEnc: encryptField(iqama),
+          iqamaHash: hmacField(iqama),
+          iqamaExpiry: expiry,
+          licenseNumberEnc: encryptField(license),
+          licenseType: "private",
+          licenseExpiry: expiry,
+          status: "active",
+        });
+        return User.create({
+          companyId: company._id,
+          role: "driver",
+          name: "Demo Driver",
+          mobileEnc: encryptField(mobile),
+          mobileHash,
+          mobileLast4: mobile.slice(-4),
+          driverId: driver._id,
+          status: "active",
+        });
       });
-      return User.create({
-        companyId: company._id,
-        role: "driver",
-        name: "Demo Driver",
-        mobileEnc: encryptField(mobile),
-        mobileHash,
-        mobileLast4: mobile.slice(-4),
-        driverId: driver._id,
-        status: "active",
-      });
-    });
-  } catch (error) {
-    if (!isDuplicateKey(error)) throw error;
-    const again = await User.findOne({ mobileHash, role: "driver", status: "active" });
-    if (!again) throw new AppError(401, "INVALID_OTP", "The code is incorrect or expired");
-    return again;
+    } catch (error) {
+      if (!isDuplicateKey(error)) throw error;
+      const recovered = await existingDemoUser(mobile, mobileHash);
+      if (recovered) return recovered;
+    }
   }
+  throw new AppError(409, "DUPLICATE", "This mobile number is already in use");
 }
 
 export async function verifyOtp(mobileRaw: string, code: string, res: Response) {

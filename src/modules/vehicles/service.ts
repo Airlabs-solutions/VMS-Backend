@@ -36,6 +36,7 @@ export const vehicleBody = z.object({
   odometerKm: z.coerce.number().int().min(0),
   pucExpiry: z.string().trim().optional(),
   fitnessExpiry: z.string().trim().optional(),
+  fahasExpiry: z.string().trim().optional(),
   status: z.enum(VEHICLE_STATUSES).optional(),
 });
 
@@ -84,6 +85,7 @@ function vehicleDto(vehicle: {
     odometerKm: vehicle.odometerKm,
     pucExpiry: dateDto(vehicle.pucExpiry),
     fitnessExpiry: dateDto(vehicle.fitnessExpiry),
+    fahasExpiry: dateDto(earlierDate(vehicle.pucExpiry, vehicle.fitnessExpiry)),
     status: statusDto(vehicle.status),
     currentDriverId: sid(vehicle.currentDriverId),
     createdAt: dateDto(vehicle.createdAt),
@@ -258,8 +260,8 @@ export async function createVehicle(input: VehicleInput) {
       type: input.type,
       ownership: input.ownership,
       odometerKm: input.odometerKm,
-      pucExpiry: optionalDate(input.pucExpiry, "Pollution (PUC) expiry"),
-      fitnessExpiry: optionalDate(input.fitnessExpiry, "Fitness certificate expiry"),
+      pucExpiry: optionalDate(fahasInput(input), "Fahas"),
+      fitnessExpiry: optionalDate(fahasInput(input), "Fahas"),
       status: input.status ?? "active",
     });
     await saveInsurance(vehicle._id, input.insuranceStart, input.insuranceEnd, vehicle.plateNumber);
@@ -288,8 +290,12 @@ export async function updateVehicle(id: string, input: Partial<VehicleInput>) {
   if (input.type) vehicle.type = input.type;
   if (input.ownership) vehicle.ownership = input.ownership;
   if (input.odometerKm != null) vehicle.odometerKm = input.odometerKm;
-  if (input.pucExpiry !== undefined) vehicle.pucExpiry = optionalDate(input.pucExpiry, "Pollution (PUC) expiry");
-  if (input.fitnessExpiry !== undefined) vehicle.fitnessExpiry = optionalDate(input.fitnessExpiry, "Fitness certificate expiry");
+  if (input.fahasExpiry !== undefined || input.pucExpiry !== undefined || input.fitnessExpiry !== undefined) {
+    const raw = fahasInput(input);
+    const fahas = raw ? optionalDate(raw, "Fahas") : null;
+    vehicle.pucExpiry = fahas;
+    vehicle.fitnessExpiry = fahas;
+  }
   if (input.status) vehicle.status = input.status;
   try {
     await vehicle.save();
@@ -299,6 +305,16 @@ export async function updateVehicle(id: string, input: Partial<VehicleInput>) {
   }
   await saveInsurance(vehicle._id, input.insuranceStart, input.insuranceEnd, vehicle.plateNumber);
   return vehicleDto(vehicle);
+}
+
+function fahasInput(input: { fahasExpiry?: string; pucExpiry?: string; fitnessExpiry?: string }) {
+  return input.fahasExpiry || input.pucExpiry || input.fitnessExpiry;
+}
+
+function earlierDate(left?: Date | null, right?: Date | null) {
+  const dates = [left, right].filter((value): value is Date => Boolean(value));
+  if (!dates.length) return null;
+  return dates.reduce((soonest, value) => (value.getTime() < soonest.getTime() ? value : soonest));
 }
 
 function optionalDate(value: string | undefined, label: string): Date | undefined {
@@ -435,7 +451,7 @@ export async function commitImport(id: string) {
             status: "active",
           },
         ],
-        { session },
+        { session, ordered: true },
       );
     }
     batch.status = "committed";

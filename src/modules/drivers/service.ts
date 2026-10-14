@@ -6,6 +6,7 @@ import { decryptField, encryptField, hmacField } from "../../lib/crypto";
 import { dateDto, statusDto } from "../../lib/present";
 import { AppError, notFound } from "../../lib/errors";
 import { escapeRegex, listArgs, listResult, writeXlsx } from "../../lib/pagination";
+import { assertMobileAvailable } from "../../lib/mobileUnique";
 import { formatSaudiMobile, maskMobileLast4, normalizeSaudiMobile } from "../../lib/phone";
 import { expiryStatus } from "../../lib/status";
 import { isDuplicateKey, withTransaction } from "../../lib/tenantPlugin";
@@ -13,6 +14,7 @@ import { hashPassword } from "../auth/service";
 import { User } from "../users/model";
 import { bumpOdometer } from "../vehicles/service";
 import { Vehicle } from "../vehicles/model";
+import { publicFileUrl } from "../files/service";
 import { Assignment, Driver, Handover } from "./model";
 
 const SORT = ["name", "createdAt", "status"];
@@ -47,6 +49,7 @@ function driverDto(
     licenseExpiry: Date;
     status: string;
     fileIds?: unknown[];
+    photoId?: unknown;
     createdAt?: Date;
   },
   reveal = false,
@@ -69,6 +72,7 @@ function driverDto(
     licenseStatus: statusDto(expiryStatus(driver.licenseExpiry)),
     status: statusDto(driver.status),
     fileIds: (driver.fileIds ?? []).map(String),
+    photoUrl: driver.photoId ? publicFileUrl(String(driver.photoId)) : null,
     createdAt: dateDto(driver.createdAt),
   };
 }
@@ -161,6 +165,7 @@ export async function createDriver(input: z.infer<typeof driverBody>) {
   const mobile = normalizeSaudiMobile(input.mobile);
   const mobileHash = hmacField(mobile);
   const iqamaHash = hmacField(input.iqamaNumber);
+  await assertMobileAvailable(mobile);
   try {
     const driver = await Driver.create({
       name: input.name,
@@ -213,6 +218,7 @@ export async function updateDriver(id: string, input: Partial<z.infer<typeof dri
   if (input.licenseNumber) driver.licenseNumberEnc = encryptField(input.licenseNumber);
   if (input.mobile) {
     const mobile = normalizeSaudiMobile(input.mobile);
+    await assertMobileAvailable(mobile, { driverId: String(driver._id) });
     driver.mobileEnc = encryptField(mobile);
     driver.mobileHash = hmacField(mobile);
     driver.mobileLast4 = mobile.slice(-4);
@@ -299,7 +305,7 @@ export async function assignDriver(
     }
     const created = await Assignment.create(
       [{ vehicleId: vehicle._id, driverId: driver._id, startDate: input.date, endDate: null }],
-      { session },
+      { session, ordered: true },
     );
     if (vehicleAssignment) {
       await Handover.create(
@@ -316,7 +322,7 @@ export async function assignDriver(
             fileIds: (input.fileIds ?? []).map((id) => new Types.ObjectId(id)),
           },
         ],
-        { session },
+        { session, ordered: true },
       );
     }
     vehicle.currentDriverId = driver._id;

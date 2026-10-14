@@ -1,9 +1,10 @@
-import { Router } from "express";
+import { Router, type NextFunction, type Request, type Response } from "express";
 import multer from "multer";
 import { z } from "zod";
-import { MAX_UPLOAD_BYTES } from "../config/constants";
+import { LICENSE_TYPES, MAX_UPLOAD_BYTES } from "../config/constants";
 import { env } from "../config/env";
 import { asyncHandler } from "../lib/asyncHandler";
+import { requestContext } from "../lib/context";
 import { AppError } from "../lib/errors";
 import { authenticate } from "../middleware/authenticate";
 import { buildLimiter } from "../middleware/rateLimit";
@@ -44,7 +45,7 @@ import { saveUpload, signedUrl, streamFile, tokenIsValid } from "../modules/file
 import { createIstimara, exportIstimara, istimaraBody, listIstimara } from "../modules/istimara/service";
 import { claimBody, createClaim, createPolicy, exportInsurance, listClaims, listPolicies, policyBody, updateClaimStatus } from "../modules/insurance/service";
 import { createLog, createSchedule, exportMaintenance, listLogs, listSchedules, logBody, scheduleBody } from "../modules/maintenance/service";
-import { myFuel, myMessages, myProfile, myReply, myTrip, myUnread, myVehicle, myViolations, updateMyProfile, uploadMyPhoto } from "../modules/me/service";
+import { myFuel, myMessageFile, myMessages, myProfile, myReply, myTrip, myUnread, myVehicle, myViolations, updateMyProfile, uploadMyMessageFile, uploadMyPhoto, verifyMyProfile } from "../modules/me/service";
 import {
   createExpense,
   createFuel,
@@ -77,9 +78,21 @@ import {
   vehicleBody,
 } from "../modules/vehicles/service";
 import { runDailyAlerts } from "../jobs/dailyAlerts";
-import { deleteDirectMessage, listDirectMessages, messageBody, sendDirectMessage, updateDirectMessage } from "../modules/messages/service";
+import { broadcastBody, deleteDirectMessage, listDirectMessages, messageBody, sendBroadcast, sendDirectMessage, updateDirectMessage } from "../modules/messages/service";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_UPLOAD_BYTES } });
+
+function uploadSingle(field: string) {
+  const receive = upload.single(field);
+  return (req: Request, res: Response, next: NextFunction) => {
+    const store = requestContext.getStore();
+    receive(req, res, (error?: unknown) => {
+      const done = () => next(error);
+      if (store && requestContext.getStore() !== store) requestContext.run(store, done);
+      else done();
+    });
+  };
+}
 
 function details(error: z.ZodError) {
   return error.issues.map((issue) => ({ path: issue.path.join("."), message: issue.message }));
@@ -286,7 +299,7 @@ export function mountRoutes(router: Router) {
   router.post("/vehicles", ...admin, asyncHandler(async (req, res) => {
     res.status(201).json({ data: await createVehicle(parse(vehicleBody, req.body)) });
   }));
-  router.post("/vehicles/import", ...admin, upload.single("file"), asyncHandler(async (req, res) => {
+  router.post("/vehicles/import", ...admin, uploadSingle("file"), asyncHandler(async (req, res) => {
     if (!req.file) throw new AppError(400, "INVALID_FILE", "Choose an Excel file");
     res.json({ data: await previewImport(req.file.buffer) });
   }));
@@ -317,6 +330,9 @@ export function mountRoutes(router: Router) {
   }));
   router.get("/messages", ...admin, asyncHandler(async (_req, res) => {
     res.json({ data: await listDirectMessages() });
+  }));
+  router.post("/messages/broadcast", ...admin, asyncHandler(async (req, res) => {
+    res.status(201).json({ data: await sendBroadcast(parse(broadcastBody, req.body)) });
   }));
   router.post("/messages", ...admin, asyncHandler(async (req, res) => {
     res.status(201).json({ data: await sendDirectMessage(parse(messageBody, req.body)) });
@@ -417,7 +433,7 @@ export function mountRoutes(router: Router) {
   router.post("/expenses", ...admin, asyncHandler(async (req, res) => res.status(201).json({ data: await createExpense(parse(expenseBody, req.body)) })));
   router.get("/expenses/export.xlsx", ...admin, asyncHandler(async (_req, res) => exportRows(res, "expenses")));
 
-  router.post("/files", ...admin, upload.single("file"), asyncHandler(async (req, res) => {
+  router.post("/files", ...admin, uploadSingle("file"), asyncHandler(async (req, res) => {
     const moduleName = String(req.body?.module ?? "documents").replace(/[^\w-]/g, "").slice(0, 40) || "documents";
     res.status(201).json({ data: await saveUpload(req.file, moduleName) });
   }));
@@ -427,7 +443,8 @@ export function mountRoutes(router: Router) {
   router.get("/files/:id/download", asyncHandler(async (req, res) => {
     const token = req.query.token ? String(req.query.token) : undefined;
     if (!tokenIsValid(String(req.params.id), token)) throw new AppError(403, "FORBIDDEN", "This download link is invalid or expired");
-    await streamFile(String(req.params.id), res);
+    const range = Array.isArray(req.headers.range) ? req.headers.range[0] : req.headers.range;
+    await streamFile(String(req.params.id), res, range);
   }));
 
   router.get("/alerts", ...admin, asyncHandler(async (req, res) => res.json(await listAlerts(paging(req.query as Record<string, unknown>)))));
@@ -479,11 +496,36 @@ export function mountRoutes(router: Router) {
     const body = parse(z.object({
       name: z.string().trim().min(1).max(120).optional(),
       mobile: z.string().trim().min(7).max(24).optional(),
+      iqamaNumber: z.string().trim().regex(/^\d{10}$/, "Iqama number must be 10 digits").optional(),
+      iqamaExpiry: z.string().trim().min(1).optional(),
+      licenseNumber: z.string().trim().min(3).max(30).optional(),
+      licenseType: z.enum(LICENSE_TYPES).optional(),
+      licenseExpiry: z.string().trim().min(1).optional(),
     }), req.body);
     res.json({ data: await updateMyProfile(body) });
   }));
-  router.post("/me/photo", authenticate, requireRole("driver"), upload.single("file"), asyncHandler(async (req, res) => {
-    res.json({ data: await uploadMyPhoto(req.file) });
+  router.post("/me/profile/verify", authenticate, requireRole("driver"), asyncHandler(async (_req, res) => {
+    res.json({ data: await verifyMyProfile() });
+  }));
+  router.post("/me/photo", authenticate, requireRole("driver"), uploadSingle("file"), asyncHandler(async (req, res) => {
+    const saved = req.ctx;
+    const run = async () => {
+      const store = requestContext.getStore();
+      if (store && saved) {
+        store.userId ??= saved.userId;
+        store.role ??= saved.role;
+        store.companyId ??= saved.companyId;
+        store.driverId ??= saved.driverId;
+      }
+      res.json({ data: await uploadMyPhoto(req.file) });
+    };
+    if (requestContext.getStore() || !saved) await run();
+    else {
+      await requestContext.run(
+        { userId: saved.userId, role: saved.role, companyId: saved.companyId, driverId: saved.driverId },
+        run,
+      );
+    }
   }));
   router.get("/me/messages/unread", authenticate, requireRole("driver"), asyncHandler(async (_req, res) => {
     res.json({ data: await myUnread() });
@@ -491,9 +533,38 @@ export function mountRoutes(router: Router) {
   router.get("/me/messages", authenticate, requireRole("driver"), asyncHandler(async (_req, res) => {
     res.json({ data: await myMessages() });
   }));
+  router.get("/me/messages/files/:id/url", authenticate, requireRole("driver"), asyncHandler(async (req, res) => {
+    res.json({ data: await myMessageFile(String(req.params.id)) });
+  }));
+  router.post("/me/messages/files", authenticate, requireRole("driver"), uploadSingle("file"), asyncHandler(async (req, res) => {
+    const saved = req.ctx;
+    const run = async () => {
+      const store = requestContext.getStore();
+      if (store && saved) {
+        store.userId ??= saved.userId;
+        store.role ??= saved.role;
+        store.companyId ??= saved.companyId;
+        store.driverId ??= saved.driverId;
+      }
+      res.status(201).json({ data: await uploadMyMessageFile(req.file) });
+    };
+    if (requestContext.getStore() || !saved) await run();
+    else {
+      await requestContext.run(
+        { userId: saved.userId, role: saved.role, companyId: saved.companyId, driverId: saved.driverId },
+        run,
+      );
+    }
+  }));
   router.post("/me/messages", authenticate, requireRole("driver"), asyncHandler(async (req, res) => {
-    const body = parse(z.object({ body: z.string().trim().min(1).max(500) }), req.body);
-    res.status(201).json({ data: await myReply(body.body) });
+    const body = parse(z.object({
+      body: z.string().trim().max(500).optional().default(""),
+      fileIds: z.array(z.string().regex(/^[a-f\d]{24}$/i)).max(12).optional(),
+    }).refine((value) => value.body.length > 0 || (value.fileIds?.length ?? 0) > 0, {
+      message: "Write a message or add a file",
+      path: ["body"],
+    }), req.body);
+    res.status(201).json({ data: await myReply(body.body ?? "", body.fileIds ?? []) });
   }));
   router.get("/me/vehicle", authenticate, requireRole("driver"), asyncHandler(async (_req, res) => {
     res.json({ data: await myVehicle() });
