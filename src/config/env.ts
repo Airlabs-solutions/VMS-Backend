@@ -28,7 +28,7 @@ const schema = z.object({
   SMS_API_URL: z.string().optional(),
   SMS_WEBHOOK_SECRET: z.string().optional(),
   STORAGE_DRIVER: z.enum(["local"]).default("local"),
-  STORAGE_LOCAL_DIR: z.string().default("./uploads"),
+  STORAGE_LOCAL_DIR: z.string().default(process.env.VERCEL ? "/tmp/uploads" : "./uploads"),
   RATE_LIMIT_DISABLED: z
     .enum(["true", "false"])
     .default("false")

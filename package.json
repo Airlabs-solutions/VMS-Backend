@@ -2,6 +2,9 @@
   "name": "vms-backend",
   "version": "1.0.0",
   "private": true,
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "dev:memory": "tsx scripts/dev-memory.ts",

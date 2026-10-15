@@ -30,6 +30,9 @@ export function createApp() {
     requestContext.run({ ip: req.ip }, () => next());
   });
 
+  app.get("/", (_req, res) => {
+    res.json({ data: { status: "ok", service: "VMS API" } });
+  });
   app.get("/api/v1/health", (_req, res) => {
     res.json({ data: { status: "ok" } });
   });
