@@ -18,6 +18,8 @@ export function getCtx(): RequestContext {
   return requestContext.getStore() ?? {};
 }
 
+export const getContext = getCtx;
+
 export function requireCompanyId(): string {
   const companyId = getCtx().companyId;
   if (!companyId) {

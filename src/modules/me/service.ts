@@ -308,7 +308,6 @@ export async function uploadMyPhoto(file: Express.Multer.File | undefined) {
 }
 
 export async function myMessages() {
-  await requireVerifiedProfile();
   return listForDriver(await requireDriverId());
 }
 
@@ -317,12 +316,10 @@ export async function myUnread() {
 }
 
 export async function myMessageFile(fileId: string) {
-  await requireVerifiedProfile();
   return fileUrlForDriver(await requireDriverId(), fileId);
 }
 
 export async function uploadMyMessageFile(file: Express.Multer.File | undefined) {
-  await requireVerifiedProfile();
   await requireDriverId();
   if (!file) throw new AppError(400, "INVALID_FILE", "Choose a file to upload");
   if (file.size > 10 * 1024 * 1024) throw new AppError(400, "INVALID_FILE", "This file is larger than 10 MB");
@@ -336,7 +333,6 @@ export async function uploadMyMessageFile(file: Express.Multer.File | undefined)
 }
 
 export async function myReply(body: string, fileIds: string[] = []) {
-  await requireVerifiedProfile();
   return replyToAdmin(await requireDriverId(), body, fileIds);
 }
 

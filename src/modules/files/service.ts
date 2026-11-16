@@ -1,11 +1,9 @@
-import { createReadStream } from "node:fs";
-import { mkdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Response } from "express";
 import { Types } from "mongoose";
 import { MAX_UPLOAD_BYTES } from "../../config/constants";
-import { env } from "../../config/env";
+import { getStorageProvider } from "../../core/storage";
 import { requireCompanyId } from "../../lib/context";
 import { safeEqual, signValue } from "../../lib/crypto";
 import { AppError, notFound } from "../../lib/errors";
@@ -45,10 +43,11 @@ export async function saveUpload(file: Express.Multer.File | undefined, moduleNa
   const detected = detect(file.buffer, file.originalname || "");
   const companyId = requireCompanyId();
   const year = new Date().getFullYear();
-  const key = path.join("companies", companyId, moduleName, String(year), `${randomUUID()}.${detected.ext}`);
-  const absolute = path.join(env.STORAGE_LOCAL_DIR, key);
-  await mkdir(path.dirname(absolute), { recursive: true });
-  await writeFile(absolute, file.buffer);
+  const key = path.join("companies", companyId, moduleName, String(year), `${randomUUID()}.${detected.ext}`).replace(/\\/g, "/");
+
+  const storage = getStorageProvider();
+  await storage.save(key, file.buffer, detected.mime);
+
   const record = await FileAsset.create({
     key,
     name: path.basename(file.originalname).slice(0, 180) || `file.${detected.ext}`,
@@ -93,52 +92,35 @@ function playbackMime(mime: string, name: string) {
   return AUDIO_MIME[path.extname(name).toLowerCase()] ?? mime;
 }
 
-function pipeStream(absolute: string, res: Response, start?: number, end?: number) {
-  const stream = createReadStream(absolute, start === undefined ? undefined : { start, end });
-  stream.on("error", () => {
-    if (!res.headersSent) {
-      res.status(404).json({ error: { code: "NOT_FOUND", message: "File was not found" } });
-      return;
-    }
-    res.destroy();
-  });
-  stream.pipe(res);
-}
-
 export async function streamFile(id: string, res: Response, rangeHeader?: string) {
   if (!Types.ObjectId.isValid(id)) throw notFound("File");
   const file = await FileAsset.findById(id).setOptions({ skipTenant: true }).lean();
   if (!file) throw notFound("File");
-  const absolute = path.join(env.STORAGE_LOCAL_DIR, file.key);
-  let info;
-  try {
-    info = await stat(absolute);
-  } catch {
-    throw notFound("File");
-  }
+
+  const storage = getStorageProvider();
+  const readResult = await storage.read(file.key, rangeHeader);
+
   const mime = playbackMime(file.mime, file.name);
   const inline = mime.startsWith("image/") || mime.startsWith("audio/") || mime === "application/pdf";
   res.setHeader("Accept-Ranges", "bytes");
   res.setHeader("Content-Type", mime);
   res.setHeader("Content-Disposition", `${inline ? "inline" : "attachment"}; filename="${file.name.replace(/"/g, "")}"`);
 
-  const match = rangeHeader ? /^bytes=(\d*)-(\d*)$/.exec(rangeHeader) : null;
-  if (match && mime.startsWith("audio/")) {
-    const start = match[1] ? Number(match[1]) : 0;
-    const end = match[2] ? Math.min(Number(match[2]), info.size - 1) : info.size - 1;
-    if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= info.size) {
-      res.status(416);
-      res.setHeader("Content-Range", `bytes */${info.size}`);
-      res.end();
-      return;
-    }
+  if (readResult.range) {
     res.status(206);
-    res.setHeader("Content-Range", `bytes ${start}-${end}/${info.size}`);
-    res.setHeader("Content-Length", String(end - start + 1));
-    pipeStream(absolute, res, start, end);
-    return;
+    res.setHeader("Content-Range", `bytes ${readResult.range.start}-${readResult.range.end}/${readResult.range.total}`);
+    res.setHeader("Content-Length", String(readResult.size));
+  } else {
+    res.setHeader("Content-Length", String(readResult.size));
   }
 
-  res.setHeader("Content-Length", String(info.size));
-  pipeStream(absolute, res);
+  readResult.stream.on("error", () => {
+    if (!res.headersSent) {
+      res.status(404).json({ error: { code: "NOT_FOUND", message: "File was not found" } });
+      return;
+    }
+    res.destroy();
+  });
+
+  readResult.stream.pipe(res);
 }

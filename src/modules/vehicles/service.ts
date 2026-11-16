@@ -30,6 +30,12 @@ export const vehicleBody = z.object({
   note: z.string().trim().max(2000).optional(),
   insuranceStart: z.string().trim().optional(),
   insuranceEnd: z.string().trim().optional(),
+  insurancePolicyNumber: z.string().trim().max(80).optional(),
+  insuranceInsurer: z.string().trim().max(120).optional(),
+  insuranceType: z.enum(["comprehensive", "third_party"]).optional(),
+  insurancePremium: z.coerce.number().min(0).optional(),
+  insuranceFileId: z.string().regex(/^[a-f\d]{24}$/i).optional(),
+  driverLicenseFileIds: z.array(z.string().regex(/^[a-f\d]{24}$/i)).optional(),
   vin: z.string().trim().min(3).max(32),
   type: z.enum(VEHICLE_TYPES),
   ownership: z.enum(OWNERSHIP_TYPES),
@@ -197,15 +203,25 @@ export async function getVehicle(id: string) {
   const vehicle = await Vehicle.findById(id).lean();
   if (!vehicle) throw notFound("Vehicle");
   const [driver, istimara, policy, schedules] = await Promise.all([
-    vehicle.currentDriverId ? Driver.findById(vehicle.currentDriverId).select("name mobileLast4").lean() : null,
+    vehicle.currentDriverId ? Driver.findById(vehicle.currentDriverId).select("name mobileLast4 fileIds").lean() : null,
     Istimara.findOne({ vehicleId: vehicle._id }).sort({ expiryDate: -1 }).lean(),
     InsurancePolicy.findOne({ vehicleId: vehicle._id }).sort({ endDate: -1 }).lean(),
     MaintenanceSchedule.find({ vehicleId: vehicle._id }).lean(),
   ]);
+  const storedDocs = ((vehicle as { documents?: Array<{ kind: string; fileId: unknown; uploadedAt?: Date }> }).documents ?? []).map((doc) => ({
+    kind: doc.kind,
+    fileId: String(doc.fileId),
+    uploadedAt: dateDto(doc.uploadedAt),
+  }));
   return {
     ...vehicleDto(vehicle),
     currentDriver: driver
-      ? { id: String(driver._id), name: driver.name, mobileMasked: `***** ${driver.mobileLast4}` }
+      ? {
+          id: String(driver._id),
+          name: driver.name,
+          mobileMasked: `***** ${driver.mobileLast4}`,
+          fileIds: (driver.fileIds ?? []).map(String),
+        }
       : null,
     istimara: istimara
       ? {
@@ -213,6 +229,7 @@ export async function getVehicle(id: string) {
           number: istimara.number,
           expiryDate: dateDto(istimara.expiryDate),
           status: statusDto(expiryStatus(istimara.expiryDate)),
+          fileIds: (istimara.fileIds ?? []).map(String),
         }
       : null,
     insurance: policy
@@ -223,8 +240,10 @@ export async function getVehicle(id: string) {
           startDate: dateDto(policy.startDate),
           endDate: dateDto(policy.endDate),
           status: statusDto(expiryStatus(policy.endDate)),
+          fileIds: (policy.fileIds ?? []).map(String),
         }
       : null,
+    documents: storedDocs,
     maintenance: schedules.map((schedule) => ({
       id: String(schedule._id),
       serviceType: schedule.serviceType,
@@ -263,8 +282,13 @@ export async function createVehicle(input: VehicleInput) {
       pucExpiry: optionalDate(fahasInput(input), "Fahas"),
       fitnessExpiry: optionalDate(fahasInput(input), "Fahas"),
       status: input.status ?? "active",
+      documents: (input.driverLicenseFileIds ?? []).map((fid) => ({
+        kind: "driver_license" as const,
+        fileId: new Types.ObjectId(fid),
+        uploadedAt: new Date(),
+      })),
     });
-    await saveInsurance(vehicle._id, input.insuranceStart, input.insuranceEnd, vehicle.plateNumber);
+    await saveInsurance(vehicle._id, input, vehicle.plateNumber);
     return vehicleDto(vehicle);
   } catch (error) {
     if (isDuplicateKey(error)) throw new AppError(409, "DUPLICATE", "Plate number or VIN already exists");
@@ -297,13 +321,21 @@ export async function updateVehicle(id: string, input: Partial<VehicleInput>) {
     vehicle.fitnessExpiry = fahas;
   }
   if (input.status) vehicle.status = input.status;
+  if (input.driverLicenseFileIds && input.driverLicenseFileIds.length > 0) {
+    const existing = new Set((vehicle.documents ?? []).map((d) => String(d.fileId)));
+    for (const fid of input.driverLicenseFileIds) {
+      if (!existing.has(fid)) {
+        vehicle.documents.push({ kind: "driver_license", fileId: new Types.ObjectId(fid), uploadedAt: new Date() });
+      }
+    }
+  }
   try {
     await vehicle.save();
   } catch (error) {
     if (isDuplicateKey(error)) throw new AppError(409, "DUPLICATE", "Plate number or VIN already exists");
     throw error;
   }
-  await saveInsurance(vehicle._id, input.insuranceStart, input.insuranceEnd, vehicle.plateNumber);
+  await saveInsurance(vehicle._id, input, vehicle.plateNumber);
   return vehicleDto(vehicle);
 }
 
@@ -324,7 +356,21 @@ function optionalDate(value: string | undefined, label: string): Date | undefine
   return date;
 }
 
-async function saveInsurance(vehicleId: unknown, start: string | undefined, end: string | undefined, plate: string) {
+async function saveInsurance(
+  vehicleId: unknown,
+  input: {
+    insuranceStart?: string;
+    insuranceEnd?: string;
+    insurancePolicyNumber?: string;
+    insuranceInsurer?: string;
+    insuranceType?: "comprehensive" | "third_party";
+    insurancePremium?: number;
+    insuranceFileId?: string;
+  },
+  plate: string,
+) {
+  const start = input.insuranceStart;
+  const end = input.insuranceEnd;
   if (!start || !end) return;
   const startDate = new Date(start);
   const endDate = new Date(end);
@@ -336,17 +382,28 @@ async function saveInsurance(vehicleId: unknown, start: string | undefined, end:
   if (latest) {
     latest.startDate = startDate;
     latest.endDate = endDate;
+    if (input.insurancePolicyNumber) latest.policyNumber = input.insurancePolicyNumber;
+    if (input.insuranceInsurer) latest.insurer = input.insuranceInsurer;
+    if (input.insuranceType) latest.type = input.insuranceType;
+    if (input.insurancePremium !== undefined) latest.premiumHalalas = Math.round(input.insurancePremium * 100);
+    if (input.insuranceFileId) {
+      const fId = new Types.ObjectId(input.insuranceFileId);
+      if (!latest.fileIds.some((id) => String(id) === String(fId))) {
+        latest.fileIds.push(fId);
+      }
+    }
     await latest.save();
     return;
   }
   await InsurancePolicy.create({
     vehicleId,
-    policyNumber: plate || "Policy",
-    insurer: "Insurer",
-    type: "comprehensive",
+    policyNumber: input.insurancePolicyNumber || plate || "Policy",
+    insurer: input.insuranceInsurer || "Insurer",
+    type: input.insuranceType || "comprehensive",
     startDate,
     endDate,
-    premiumHalalas: 0,
+    premiumHalalas: input.insurancePremium !== undefined ? Math.round(input.insurancePremium * 100) : 0,
+    fileIds: input.insuranceFileId ? [new Types.ObjectId(input.insuranceFileId)] : [],
   });
 }
 

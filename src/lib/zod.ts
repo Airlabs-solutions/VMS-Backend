@@ -1,12 +1,17 @@
 import { z } from "zod";
 
 export const objectId = z.string().regex(/^[a-f\d]{24}$/i, "Invalid id");
+export const objectIdString = objectId;
 
 export const money = z.coerce.number().min(0).max(100_000_000);
+export const moneyInput = money;
 export const km = z.coerce.number().int().min(0).max(10_000_000);
 export const shortText = z.string().trim().min(1).max(120);
 export const notes = z.string().trim().max(2000).optional().or(z.literal(""));
 export const dateInput = z.coerce.date();
+export const dateString = z.union([z.string().trim().min(1), z.date()]);
+export const saudiIqama = z.string().trim().regex(/^[12]\d{9}$/, "Iqama or National ID must be 10 digits starting with 1 or 2");
+export const saudiMobile = z.string().trim().min(8).max(20);
 
 export const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),

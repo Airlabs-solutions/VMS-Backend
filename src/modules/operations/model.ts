@@ -60,7 +60,11 @@ tripSchema.index({ companyId: 1, vehicleId: 1, date: -1 });
 
 const expenseSchema = new Schema(
   {
-    vehicleId: { type: Schema.Types.ObjectId, ref: "Vehicle", required: true },
+    vehicleId: { type: Schema.Types.ObjectId, ref: "Vehicle" },
+    assetRef: {
+      kind: { type: String, enum: ["vehicle", "equipment"], default: "vehicle" },
+      id: { type: Schema.Types.ObjectId },
+    },
     category: { type: String, enum: EXPENSE_CATEGORIES, required: true },
     amountHalalas: { type: Number, required: true, min: 0 },
     date: { type: Date, required: true },
@@ -72,6 +76,7 @@ const expenseSchema = new Schema(
 expenseSchema.plugin(tenantPlugin);
 expenseSchema.plugin(auditPlugin);
 expenseSchema.index({ companyId: 1, vehicleId: 1, date: -1 });
+expenseSchema.index({ companyId: 1, "assetRef.kind": 1, "assetRef.id": 1, date: -1 });
 expenseSchema.index({ companyId: 1, category: 1, date: -1 });
 
 export const FuelLog = model("FuelLog", fuelSchema);

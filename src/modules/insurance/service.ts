@@ -7,6 +7,7 @@ import { formatSar, sarToHalalas } from "../../lib/money";
 import { listArgs, listResult, writeXlsx } from "../../lib/pagination";
 import { dateDto, moneyDto, statusDto } from "../../lib/present";
 import { expiryStatus } from "../../lib/status";
+import { attachVehicleDocument } from "../documents/read";
 import { Vehicle } from "../vehicles/model";
 import { InsuranceClaim, InsurancePolicy } from "./model";
 
@@ -85,6 +86,9 @@ export async function createPolicy(input: z.infer<typeof policyBody>) {
     premiumHalalas: sarToHalalas(input.premium),
     fileIds: (input.fileIds ?? []).map((id) => new Types.ObjectId(id)),
   });
+  for (const fid of input.fileIds ?? []) {
+    await attachVehicleDocument(String(vehicle._id), "insurance", fid);
+  }
   return policyDto(row.toObject(), vehicle.plateNumber);
 }
 

@@ -13,3 +13,6 @@ build/
 # Logs
 logs/
 *.log
+
+# Uploaded files
+uploads/

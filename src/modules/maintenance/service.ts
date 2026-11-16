@@ -33,7 +33,7 @@ export const logBody = z.object({
 
 async function scheduleDto(schedule: {
   _id: unknown;
-  vehicleId: unknown;
+  vehicleId?: unknown;
   serviceType: string;
   intervalMonths: number;
   intervalKm: number;
@@ -42,7 +42,7 @@ async function scheduleDto(schedule: {
   nextDueDate: Date;
   nextDueKm: number;
 }) {
-  const vehicle = await Vehicle.findById(schedule.vehicleId).select("odometerKm plateNumber").lean();
+  const vehicle = schedule.vehicleId ? await Vehicle.findById(schedule.vehicleId).select("odometerKm plateNumber").lean() : null;
   const status = maintenanceStatus({
     nextDueDate: schedule.nextDueDate,
     nextDueKm: schedule.nextDueKm,

@@ -180,6 +180,7 @@ export async function runReport(name: string, raw: ReportQuery, res?: Response) 
         remaining: formatSar(remaining),
         upcoming: upcoming ? formatDisplayDate(upcoming.dueDate) : "",
         monthly: formatSar(plan.monthlyAmountHalalas),
+        balloon: formatSar(plan.balloonAmountHalalas ?? 0),
       });
     }
   } else if (name === "violations") {

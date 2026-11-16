@@ -2,6 +2,7 @@ import { createHash, randomInt } from "node:crypto";
 import bcrypt from "bcryptjs";
 import type { Request, Response } from "express";
 import { DEMO_OTP, LOGIN_LOCK_MS, LOGIN_MAX_FAILURES, OTP_MAX_ATTEMPTS, OTP_TTL_MS, REFRESH_TOKEN_DAYS, SUPER_ADMIN_EMAIL } from "../../config/constants";
+import { resolveUserPermissions } from "../../core/auth/permissions";
 import { env } from "../../config/env";
 import { appKindFromRole, clearAuthCookies, readSessionCookies, setAuthCookies, signAccessToken, type AccessPayload } from "../../lib/cookies";
 import { requestContext } from "../../lib/context";
@@ -73,9 +74,33 @@ async function issueSession(
     expiresAt: new Date(Date.now() + REFRESH_TOKEN_DAYS * 24 * 60 * 60 * 1000),
   });
   setAuthCookies(res, access, refresh, csrf, appKindFromRole(user.role));
+
+  const permissions = await resolveUserPermissions(user.role, payload.companyId ?? undefined);
+  let modules: string[] = ["fleet"];
+  let limits;
+  if (user.role === "super_admin") {
+    modules = ["fleet", "equipment", "hr", "payroll"];
+  } else if (payload.companyId) {
+    const c = await Company.findById(payload.companyId).select("modules limits maxVehicles smsCredits").lean();
+    if (c) {
+      if (c.modules && c.modules.length > 0) modules = c.modules;
+      limits = c.limits ?? {
+        vehicles: c.maxVehicles ?? 500,
+        equipment: 0,
+        employees: 0,
+        adminSeats: 5,
+        smsCredits: c.smsCredits ?? 0,
+        storageMb: 5120,
+      };
+    }
+  }
+
   return {
     ...publicUser(user),
     companyId: payload.companyId,
+    modules,
+    permissions,
+    limits,
     csrfToken: csrf,
     supportGrantId: payload.supportGrantId,
   };
@@ -331,8 +356,15 @@ export async function hashPassword(password: string): Promise<string> {
 
 const SUPER_ADMIN_OTP = "A sign-in code was sent to the Super Admin Gmail.";
 
-async function ensureSuperAdmin(name: string) {
-  let user = await User.findOne({ email: SUPER_ADMIN_EMAIL });
+const ALLOWED_SUPER_ADMIN_EMAILS = new Set(
+  [SUPER_ADMIN_EMAIL, env.GMAIL_USER, "info@airlabss.com", "ismailthalithanooji@gmail.com"]
+    .filter((e): e is string => Boolean(e))
+    .map((e) => e.toLowerCase().trim()),
+);
+
+async function ensureSuperAdmin(name: string, email = SUPER_ADMIN_EMAIL) {
+  const normalizedEmail = email.toLowerCase().trim();
+  let user = await User.findOne({ email: normalizedEmail });
   if (user && user.role !== "super_admin") {
     throw new AppError(403, "GOOGLE_NOT_ALLOWED", "This Google account is not allowed");
   }
@@ -340,7 +372,7 @@ async function ensureSuperAdmin(name: string) {
     user = await User.create({
       role: "super_admin",
       name,
-      email: SUPER_ADMIN_EMAIL,
+      email: normalizedEmail,
       status: "active",
     });
     return user;
@@ -364,8 +396,8 @@ export function superAdminAuthConfig() {
 
 export async function signInSuperAdminWithGoogle(credential: string, res: Response) {
   const google = await verifySuperAdminGoogle(credential);
-  if (google.email === SUPER_ADMIN_EMAIL) {
-    const user = await ensureSuperAdmin(google.name);
+  if (ALLOWED_SUPER_ADMIN_EMAILS.has(google.email.toLowerCase().trim())) {
+    const user = await ensureSuperAdmin(google.name, google.email);
     return issueSession(user, res);
   }
   const user = await User.findOne({ email: google.email, role: "super_admin", status: "active" });
@@ -375,8 +407,8 @@ export async function signInSuperAdminWithGoogle(credential: string, res: Respon
 
 export async function requestSuperAdminCode(emailInput?: string) {
   const email = emailInput?.trim().toLowerCase() || SUPER_ADMIN_EMAIL;
-  if (email === SUPER_ADMIN_EMAIL) {
-    await ensureSuperAdmin("Platform Admin");
+  if (ALLOWED_SUPER_ADMIN_EMAILS.has(email)) {
+    await ensureSuperAdmin("Platform Admin", email);
   } else {
     const allowed = await User.findOne({ email, role: "super_admin", status: "active" });
     if (!allowed) throw new AppError(403, "NOT_ALLOWED", "This email cannot be used to sign in.");
@@ -398,7 +430,7 @@ export async function requestSuperAdminCode(emailInput?: string) {
   });
 
   try {
-    const delivered = await sendSuperAdminCode(code);
+    const delivered = await sendSuperAdminCode(code, email);
     if (!delivered) {
       logger.info({ devCode: code }, "Super admin OTP issued");
       return { message: "Gmail is not configured, so the development code is shown below.", devCode: code };

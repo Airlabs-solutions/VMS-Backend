@@ -5,6 +5,7 @@ import { notFound } from "../../lib/errors";
 import { dateDto, statusDto } from "../../lib/present";
 import { listArgs, listResult, writeXlsx } from "../../lib/pagination";
 import { expiryStatus } from "../../lib/status";
+import { attachVehicleDocument } from "../documents/read";
 import { Vehicle } from "../vehicles/model";
 import { Istimara } from "./model";
 
@@ -59,6 +60,9 @@ export async function createIstimara(input: z.infer<typeof istimaraBody>) {
     expiryDate: input.expiryDate,
     fileIds: (input.fileIds ?? []).map((id) => new Types.ObjectId(id)),
   });
+  for (const fid of input.fileIds ?? []) {
+    await attachVehicleDocument(String(vehicle._id), "istimara", fid);
+  }
   return dto(row.toObject(), vehicle.plateNumber);
 }
 

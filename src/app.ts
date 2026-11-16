@@ -2,7 +2,9 @@ import cookieParser from "cookie-parser";
 import cors from "cors";
 import express from "express";
 import helmet from "helmet";
+import mongoose from "mongoose";
 import { env } from "./config/env";
+import { getStorageProvider } from "./core/storage";
 import { requestContext } from "./lib/context";
 import { logger, redactMessage } from "./lib/logger";
 import { errorHandler, notFoundHandler } from "./middleware/error";
@@ -30,12 +32,56 @@ export function createApp() {
     requestContext.run({ ip: req.ip }, () => next());
   });
 
+  // Root Service Check
   app.get("/", (_req, res) => {
     res.json({ data: { status: "ok", service: "VMS API" } });
+  });
+
+  // Liveness Probe: process is alive
+  app.get("/healthz", (_req, res) => {
+    res.json({ status: "ok", env: env.APP_ENV, timestamp: new Date().toISOString() });
   });
   app.get("/api/v1/health", (_req, res) => {
     res.json({ data: { status: "ok" } });
   });
+
+  // Readiness Probe: checks active connections to database and storage
+  app.get("/readyz", async (_req, res) => {
+    const checks: Record<string, string> = {};
+    let isReady = true;
+
+    // 1. Database check
+    try {
+      if (mongoose.connection.readyState === 1 && mongoose.connection.db) {
+        await mongoose.connection.db.admin().ping();
+        checks.database = "ok";
+      } else {
+        checks.database = "disconnected";
+        isReady = false;
+      }
+    } catch (err) {
+      checks.database = err instanceof Error ? err.message : "failed";
+      isReady = false;
+    }
+
+    // 2. Storage check
+    try {
+      getStorageProvider();
+      checks.storage = "ok";
+    } catch (err) {
+      checks.storage = err instanceof Error ? err.message : "failed";
+      isReady = false;
+    }
+
+    const statusCode = isReady ? 200 : 503;
+    res.status(statusCode).json({
+      status: isReady ? "ready" : "degraded",
+      env: env.APP_ENV,
+      checks,
+      timestamp: new Date().toISOString(),
+    });
+  });
+
   app.get("/api/docs/openapi.json", (_req, res) => {
     res.json({
       openapi: "3.0.3",

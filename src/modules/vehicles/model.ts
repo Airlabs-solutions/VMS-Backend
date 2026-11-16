@@ -24,6 +24,13 @@ const vehicleSchema = new Schema(
     fitnessExpiry: { type: Date },
     status: { type: String, enum: VEHICLE_STATUSES, default: "active" },
     currentDriverId: { type: Schema.Types.ObjectId, ref: "Driver" },
+    documents: [
+      {
+        kind: { type: String, enum: ["istimara", "insurance", "driver_license"], required: true },
+        fileId: { type: Schema.Types.ObjectId, ref: "FileAsset", required: true },
+        uploadedAt: { type: Date, default: Date.now },
+      },
+    ],
   },
   { timestamps: true },
 );

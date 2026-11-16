@@ -35,6 +35,31 @@ export function addMonths(date: Date, months: number): Date {
   return next;
 }
 
+export function addDays(date: Date, days: number): Date {
+  const next = new Date(date.getTime());
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+export function formatRiyadhDate(date: Date | string | null | undefined): string {
+  return formatDisplayDate(date);
+}
+
+export function parseDateInput(value: Date | string): Date {
+  if (value instanceof Date) return value;
+  const trimmed = value.trim();
+  const ddmmyyyy = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(trimmed);
+  if (ddmmyyyy) {
+    const [, dd, mm, yyyy] = ddmmyyyy;
+    return new Date(`${yyyy}-${mm}-${dd}T00:00:00Z`);
+  }
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`Invalid date: ${value}`);
+  }
+  return parsed;
+}
+
 export function clampDueDay(year: number, monthIndex: number, dueDay: number): Date {
   const last = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
   const day = Math.min(dueDay, last);

@@ -45,6 +45,16 @@ export function listResult<T>(rows: T[], total: number, query: ListQuery) {
   return { data: rows, meta: { page: query.page, limit: query.limit, total } };
 }
 
+export function parsePagination(raw: Record<string, unknown> = {}) {
+  const page = Math.max(1, Number(raw.page ?? 1) || 1);
+  const limit = Math.min(200, Math.max(1, Number(raw.limit ?? raw.pageSize ?? 20) || 20));
+  return { page, limit, pageSize: limit, skip: (page - 1) * limit };
+}
+
+export function pageResult<T>(rows: T[], total: number, page: number, limit: number) {
+  return { data: rows, meta: { page, limit, total } };
+}
+
 export function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

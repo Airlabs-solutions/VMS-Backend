@@ -1,7 +1,16 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { MongoMemoryReplSet } from "mongodb-memory-server";
 
 async function main() {
-  const replSet = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
+  const cachedDir = path.resolve(__dirname, "../node_modules/.cache/mongodb-memory-server");
+  const cachedBin = path.join(cachedDir, "mongod-x64-darwin-7.0.24");
+  const replSet = await MongoMemoryReplSet.create({
+    replSet: { count: 1 },
+    binary: existsSync(cachedBin)
+      ? { systemBinary: cachedBin }
+      : { downloadDir: cachedDir },
+  });
   process.env.MONGODB_URI = replSet.getUri();
   process.env.NODE_ENV = process.env.NODE_ENV ?? "development";
   process.env.JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET ?? "dev-access-secret-change-me-please";
@@ -9,8 +18,6 @@ async function main() {
   process.env.FIELD_ENCRYPTION_KEY = process.env.FIELD_ENCRYPTION_KEY ?? "dev-field-encryption-key-change";
   process.env.FIELD_HMAC_KEY = process.env.FIELD_HMAC_KEY ?? "dev-field-hmac-key-change-me";
   process.env.SEED_DEMO = process.env.SEED_DEMO ?? "true";
-  const seed = await import("../src/seed.ts");
-  await seed.runSeed();
   await import("../src/server.ts");
 }
 

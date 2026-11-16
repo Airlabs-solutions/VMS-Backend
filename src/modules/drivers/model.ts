@@ -5,6 +5,7 @@ import { tenantPlugin } from "../../lib/tenantPlugin";
 
 const driverSchema = new Schema(
   {
+    employeeRef: { type: Schema.Types.ObjectId, ref: "Employee", index: true },
     name: { type: String, required: true, trim: true },
     mobileEnc: { type: String, required: true },
     mobileHash: { type: String, required: true },

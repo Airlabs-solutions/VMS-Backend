@@ -56,6 +56,7 @@ export async function sendBroadcast(input: z.infer<typeof broadcastBody>) {
       body: input.body,
       fileIds,
       broadcastId,
+      readByAdminAt: new Date(),
       createdBy: actorId,
       updatedBy: actorId,
     })),
@@ -114,6 +115,7 @@ export async function sendDirectMessage(input: z.infer<typeof messageBody>) {
     senderRole: "admin",
     body: input.body,
     fileIds: (input.fileIds ?? []).map((id) => new Types.ObjectId(id)),
+    readByAdminAt: new Date(),
   });
   const company = await Company.findById(requireCompanyId()).lean();
   const smsBody = input.body || "A document was sent from the fleet office.";
@@ -177,8 +179,31 @@ export async function listDirectMessages() {
     body: row.body,
     fileIds: (row.fileIds ?? []).map(String),
     broadcastId: row.broadcastId ? String(row.broadcastId) : null,
+    unread: row.senderRole === "driver" && !row.readByAdminAt,
     createdAt: dateDto(row.createdAt),
   }));
+}
+
+export async function unreadForAdmin() {
+  const rows = await DirectMessage.find({ senderRole: "driver", readByAdminAt: null }).select("driverId").lean();
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const driverId = String(row.driverId);
+    counts.set(driverId, (counts.get(driverId) ?? 0) + 1);
+  }
+  return {
+    unread: rows.length,
+    drivers: [...counts.entries()].map(([driverId, unread]) => ({ driverId, unread })),
+  };
+}
+
+export async function markReadByAdmin(driverId: string) {
+  if (!Types.ObjectId.isValid(driverId)) throw notFound("Driver");
+  await DirectMessage.updateMany(
+    { driverId: new Types.ObjectId(driverId), senderRole: "driver", readByAdminAt: null },
+    { readByAdminAt: new Date() },
+  );
+  return { driverId };
 }
 
 function driverMessageFilter(driverId: string) {

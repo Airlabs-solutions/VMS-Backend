@@ -79,7 +79,12 @@ export function readSessionCookies(req: Request) {
 
 export function setAuthCookies(res: Response, access: string, refresh: string, csrf: string, kind: AppKind) {
   const names = cookieNames[kind];
-  res.cookie(names.access, access, { ...cookieBase, httpOnly: true, path: "/", maxAge: 15 * 60 * 1000 });
+  res.cookie(names.access, access, {
+    ...cookieBase,
+    httpOnly: true,
+    path: "/",
+    maxAge: REFRESH_TOKEN_DAYS * 24 * 60 * 60 * 1000,
+  });
   res.cookie(names.refresh, refresh, {
     ...cookieBase,
     httpOnly: true,

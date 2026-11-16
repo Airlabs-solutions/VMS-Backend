@@ -11,8 +11,8 @@ import { EmiInstallment, EmiPlan } from "./model";
 export const planBody = z.object({
   vehicleId: z.string().regex(/^[a-f\d]{24}$/i),
   bank: z.string().trim().min(1).max(120),
-  loanAmount: z.coerce.number().positive(),
-  downPayment: z.coerce.number().min(0).default(0),
+  emiAmount: z.coerce.number().positive(),
+  balloonAmount: z.coerce.number().min(0).default(0),
   interestRate: z.coerce.number().min(0).max(100).default(0),
   tenureMonths: z.coerce.number().int().min(1).max(120),
   startDate: z.coerce.date(),
@@ -23,8 +23,8 @@ async function planSummary(plan: {
   _id: unknown;
   vehicleId: unknown;
   bank: string;
-  loanAmountHalalas: number;
-  downPaymentHalalas: number;
+  loanAmountHalalas?: number;
+  balloonAmountHalalas?: number;
   interestRate?: number;
   monthlyAmountHalalas: number;
   tenureMonths: number;
@@ -32,7 +32,9 @@ async function planSummary(plan: {
   dueDay: number;
 }) {
   const installments = await EmiInstallment.find({ emiPlanId: plan._id }).lean();
-  const paid = installments.filter((item) => item.status === "paid");
+  const paid = installments
+    .filter((item) => item.status === "paid")
+    .sort((a, b) => new Date(b.dueDate).getTime() - new Date(a.dueDate).getTime());
   const unpaid = installments
     .filter((item) => item.status !== "paid")
     .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
@@ -41,41 +43,28 @@ async function planSummary(plan: {
   const next = unpaid[0];
   const days = next ? daysBetween(new Date(), new Date(next.dueDate)) : null;
   const status = days == null ? "ok" : days < 0 ? "overdue" : days <= 3 ? "due_soon" : "ok";
-  const vehicle = await Vehicle.findById(plan.vehicleId).select("plateNumber").lean();
+  const vehicle = await Vehicle.findById(plan.vehicleId).select("plateNumber name").lean();
   return {
     id: String(plan._id),
     vehicleId: String(plan.vehicleId),
+    vehicleName: vehicle?.name?.trim() ?? "",
     plateNumber: vehicle?.plateNumber ?? "",
     bank: plan.bank,
-    loanAmount: moneyDto(plan.loanAmountHalalas),
-    downPayment: moneyDto(plan.downPaymentHalalas),
-    financed: moneyDto(Math.max(0, plan.loanAmountHalalas - plan.downPaymentHalalas)),
     interestRate: plan.interestRate ?? 0,
     monthlyAmount: moneyDto(plan.monthlyAmountHalalas),
+    balloonAmount: moneyDto(plan.balloonAmountHalalas ?? 0),
     tenureMonths: plan.tenureMonths,
+    installmentCount: installments.length,
     startDate: dateDto(plan.startDate),
     dueDay: plan.dueDay,
     nextDue: dateDto(next?.dueDate),
+    nextInstallmentId: next ? String(next._id) : null,
+    lastPaidInstallmentId: paid[0] ? String(paid[0]._id) : null,
     totalPaid: moneyDto(paidHalalas),
     remaining: moneyDto(remaining),
     installmentsLeft: unpaid.length,
     status: statusDto(status),
   };
-}
-
-function installmentAmounts(principalHalalas: number, annualPercent: number, months: number) {
-  if (principalHalalas <= 0) throw new AppError(400, "VALIDATION_ERROR", "Down payment must be less than the loan amount");
-  if (annualPercent <= 0) {
-    const base = Math.floor(principalHalalas / months);
-    const amounts = Array.from({ length: months }, () => base);
-    amounts[months - 1] = principalHalalas - base * (months - 1);
-    return amounts;
-  }
-  const monthlyRate = annualPercent / 100 / 12;
-  const factor = (1 + monthlyRate) ** months;
-  const monthly = Math.round((principalHalalas * monthlyRate * factor) / (factor - 1));
-  if (monthly <= 0) throw new AppError(400, "VALIDATION_ERROR", "Check the loan amount, interest, and tenure");
-  return Array.from({ length: months }, () => monthly);
 }
 
 function scheduleDates(start: Date, dueDay: number, count: number) {
@@ -109,8 +98,8 @@ export async function listPlans(raw: { page?: number; limit?: number; vehicleId?
 export async function createPlan(input: {
   vehicleId: string;
   bank: string;
-  loanAmount: number;
-  downPayment?: number;
+  emiAmount: number;
+  balloonAmount?: number;
   interestRate?: number;
   tenureMonths: number;
   startDate: Date;
@@ -119,14 +108,14 @@ export async function createPlan(input: {
   const vehicle = await Vehicle.findById(input.vehicleId);
   if (!vehicle) throw notFound("Vehicle");
   const interestRate = input.interestRate ?? 0;
-  const downPayment = input.downPayment ?? 0;
-  const loanHalalas = sarToHalalas(input.loanAmount);
-  const downHalalas = sarToHalalas(downPayment);
-  const amounts = installmentAmounts(loanHalalas - downHalalas, interestRate, input.tenureMonths);
-  const dates = scheduleDates(input.startDate, input.dueDay, input.tenureMonths);
+  const monthlyHalalas = sarToHalalas(input.emiAmount);
+  const balloonHalalas = sarToHalalas(input.balloonAmount ?? 0);
+  if (monthlyHalalas <= 0) throw new AppError(400, "VALIDATION_ERROR", "Enter an EMI amount above zero");
+  const amounts = Array.from({ length: input.tenureMonths }, () => monthlyHalalas);
+  if (balloonHalalas > 0) amounts.push(balloonHalalas);
+  const dates = scheduleDates(input.startDate, input.dueDay, amounts.length);
+  const todayKey = riyadhDateKey(new Date());
   const plan = await withTransaction(async (session) => {
-    const paid = await EmiInstallment.countDocuments({ vehicleId: vehicle._id, status: "paid" }).session(session);
-    if (paid > 0) throw new AppError(409, "EMI_EXISTS", "This vehicle already has EMI payments, so the schedule was not replaced");
     await EmiInstallment.deleteMany({ vehicleId: vehicle._id }).session(session);
     await EmiPlan.deleteMany({ vehicleId: vehicle._id }).session(session);
     const created = await EmiPlan.create(
@@ -134,10 +123,11 @@ export async function createPlan(input: {
         {
           vehicleId: vehicle._id,
           bank: input.bank,
-          loanAmountHalalas: loanHalalas,
-          downPaymentHalalas: downHalalas,
+          loanAmountHalalas: 0,
+          downPaymentHalalas: 0,
+          balloonAmountHalalas: balloonHalalas,
           interestRate,
-          monthlyAmountHalalas: amounts[0],
+          monthlyAmountHalalas: monthlyHalalas,
           tenureMonths: input.tenureMonths,
           startDate: input.startDate,
           dueDay: input.dueDay,
@@ -147,14 +137,19 @@ export async function createPlan(input: {
     );
     const planDoc = created[0];
     await EmiInstallment.create(
-      amounts.map((amountHalalas, index) => ({
-        emiPlanId: planDoc._id,
-        vehicleId: vehicle._id,
-        seq: index + 1,
-        dueDate: dates[index],
-        amountHalalas,
-        status: "unpaid" as const,
-      })),
+      amounts.map((amountHalalas, index) => {
+        const dueDate = dates[index];
+        const isPaid = riyadhDateKey(dueDate) <= todayKey;
+        return {
+          emiPlanId: planDoc._id,
+          vehicleId: vehicle._id,
+          seq: index + 1,
+          dueDate,
+          amountHalalas,
+          status: isPaid ? ("paid" as const) : ("unpaid" as const),
+          paidDate: isPaid ? dueDate : undefined,
+        };
+      }),
       { session, ordered: true },
     );
     return planDoc;
@@ -186,12 +181,14 @@ export async function markInstallment(id: string, status: "paid" | "unpaid", pai
 
 export async function exportEmi(res: import("express").Response) {
   const rows = await EmiInstallment.find().sort({ dueDate: 1 }).limit(10000).lean();
-  const vehicles = await Vehicle.find({ _id: { $in: rows.map((row) => row.vehicleId) } }).select("plateNumber").lean();
+  const vehicles = await Vehicle.find({ _id: { $in: rows.map((row) => row.vehicleId) } }).select("plateNumber name").lean();
   const plates = new Map(vehicles.map((vehicle) => [String(vehicle._id), vehicle.plateNumber]));
+  const names = new Map(vehicles.map((vehicle) => [String(vehicle._id), vehicle.name?.trim() ?? ""]));
   await writeXlsx(
     res,
     "emi.xlsx",
     [
+      { header: "Vehicle", key: "vehicle" },
       { header: "Plate", key: "plate" },
       { header: "Installment", key: "seq" },
       { header: "Due date", key: "dueDate" },
@@ -200,6 +197,7 @@ export async function exportEmi(res: import("express").Response) {
       { header: "Paid date", key: "paidDate" },
     ],
     rows.map((row) => ({
+      vehicle: names.get(String(row.vehicleId)) ?? "",
       plate: plates.get(String(row.vehicleId)) ?? "",
       seq: row.seq,
       dueDate: formatDisplayDate(row.dueDate),

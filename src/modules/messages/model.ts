@@ -10,6 +10,7 @@ const messageSchema = new Schema(
     fileIds: [{ type: Schema.Types.ObjectId, ref: "FileAsset" }],
     broadcastId: { type: Schema.Types.ObjectId, default: null },
     readByDriverAt: { type: Date },
+    readByAdminAt: { type: Date },
   },
   { timestamps: true },
 );
