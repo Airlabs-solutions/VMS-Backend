@@ -51,7 +51,7 @@ export async function seedDatabase() {
       },
       plan: "standard",
       maxVehicles: 500,
-      smsSenderName: "VMS",
+      smsSenderName: "AxetPro",
       smsCredits: 0,
       driverPasswordLogin: false,
     });

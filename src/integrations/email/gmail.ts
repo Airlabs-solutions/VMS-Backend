@@ -20,8 +20,8 @@ export async function sendSuperAdminCode(code: string, to = SUPER_ADMIN_EMAIL) {
     await transport.sendMail({
       from: env.GMAIL_USER,
       to,
-      subject: "VMS super admin sign-in code",
-      text: `Your VMS super admin sign-in code is ${code}. It expires in 5 minutes. If you did not request this, you can ignore this email.`,
+      subject: "AxetPro super admin sign-in code",
+      text: `Your AxetPro super admin sign-in code is ${code}. It expires in 5 minutes. If you did not request this, you can ignore this email.`,
     });
     return true;
   } catch (error) {

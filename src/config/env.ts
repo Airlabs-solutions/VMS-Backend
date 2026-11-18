@@ -39,7 +39,7 @@ const schema = z.object({
 
   // SMS configuration
   SMS_PROVIDER: z.enum(["log", "unifonic", "taqnyat", "msegat"]).default("log"),
-  SMS_SENDER: z.string().default("VMS"),
+  SMS_SENDER: z.string().default("AxetPro"),
   SMS_API_KEY: z.preprocess(emptyToUndefined, z.string().optional()),
   SMS_API_URL: z.preprocess(emptyToUndefined, z.string().optional()),
   SMS_WEBHOOK_SECRET: z.preprocess(emptyToUndefined, z.string().optional()),

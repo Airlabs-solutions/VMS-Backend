@@ -53,7 +53,7 @@ async function main() {
   await seedDatabase();
   const app = createApp();
   server = app.listen(env.PORT, () => {
-    logger.info({ port: env.PORT, env: env.APP_ENV }, "VMS API listening");
+    logger.info({ port: env.PORT, env: env.APP_ENV }, "AxetPro API listening");
   });
 }
 

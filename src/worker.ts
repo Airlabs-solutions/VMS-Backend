@@ -73,7 +73,7 @@ async function main() {
       });
   });
 
-  logger.info("VMS Worker started with queues and schedulers active");
+  logger.info("AxetPro Worker started with queues and schedulers active");
 }
 
 main().catch((error: unknown) => {

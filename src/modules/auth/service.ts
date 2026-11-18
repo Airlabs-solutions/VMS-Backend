@@ -200,7 +200,7 @@ export async function requestOtp(mobileRaw: string) {
     attempts: 0,
   });
   if (canSend && company) {
-    const body = `Your VMS sign-in code is ${code}. It expires in 5 minutes.`;
+    const body = `Your AxetPro sign-in code is ${code}. It expires in 5 minutes.`;
     try {
       await getSmsProvider().send({ to: mobile, body, sender: company.smsSenderName || env.SMS_SENDER });
     } catch (error) {
@@ -281,7 +281,7 @@ async function driverForDemoLogin(mobile: string) {
       status: "active",
       plan: "standard",
       maxVehicles: 500,
-      smsSenderName: "VMS",
+      smsSenderName: "AxetPro",
       smsCredits: 0,
       driverPasswordLogin: false,
     });

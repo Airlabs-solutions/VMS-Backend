@@ -34,7 +34,7 @@ export function createApp() {
 
   // Root Service Check
   app.get("/", (_req, res) => {
-    res.json({ data: { status: "ok", service: "VMS API" } });
+    res.json({ data: { status: "ok", service: "AxetPro API" } });
   });
 
   // Liveness Probe: process is alive
@@ -85,7 +85,7 @@ export function createApp() {
   app.get("/api/docs/openapi.json", (_req, res) => {
     res.json({
       openapi: "3.0.3",
-      info: { title: "VMS API", version: "1.0.0" },
+      info: { title: "AxetPro API", version: "1.0.0" },
       servers: [{ url: "/api/v1" }],
       paths: {
         "/auth/login": { post: { summary: "Company admin login" } },

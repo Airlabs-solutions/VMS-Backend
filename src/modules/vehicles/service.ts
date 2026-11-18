@@ -35,6 +35,7 @@ export const vehicleBody = z.object({
   insuranceType: z.enum(["comprehensive", "third_party"]).optional(),
   insurancePremium: z.coerce.number().min(0).optional(),
   insuranceFileId: z.string().regex(/^[a-f\d]{24}$/i).optional(),
+  istimaraFileIds: z.array(z.string().regex(/^[a-f\d]{24}$/i)).optional(),
   driverLicenseFileIds: z.array(z.string().regex(/^[a-f\d]{24}$/i)).optional(),
   vin: z.string().trim().min(3).max(32),
   type: z.enum(VEHICLE_TYPES),
@@ -282,11 +283,18 @@ export async function createVehicle(input: VehicleInput) {
       pucExpiry: optionalDate(fahasInput(input), "Fahas"),
       fitnessExpiry: optionalDate(fahasInput(input), "Fahas"),
       status: input.status ?? "active",
-      documents: (input.driverLicenseFileIds ?? []).map((fid) => ({
-        kind: "driver_license" as const,
-        fileId: new Types.ObjectId(fid),
-        uploadedAt: new Date(),
-      })),
+      documents: [
+        ...(input.istimaraFileIds ?? []).map((fid) => ({
+          kind: "istimara" as const,
+          fileId: new Types.ObjectId(fid),
+          uploadedAt: new Date(),
+        })),
+        ...(input.driverLicenseFileIds ?? []).map((fid) => ({
+          kind: "driver_license" as const,
+          fileId: new Types.ObjectId(fid),
+          uploadedAt: new Date(),
+        })),
+      ],
     });
     await saveInsurance(vehicle._id, input, vehicle.plateNumber);
     return vehicleDto(vehicle);
@@ -321,11 +329,15 @@ export async function updateVehicle(id: string, input: Partial<VehicleInput>) {
     vehicle.fitnessExpiry = fahas;
   }
   if (input.status) vehicle.status = input.status;
-  if (input.driverLicenseFileIds && input.driverLicenseFileIds.length > 0) {
+  const incomingDocs = [
+    ...(input.istimaraFileIds ?? []).map((fid) => ({ kind: "istimara" as const, fid })),
+    ...(input.driverLicenseFileIds ?? []).map((fid) => ({ kind: "driver_license" as const, fid })),
+  ];
+  if (incomingDocs.length > 0) {
     const existing = new Set((vehicle.documents ?? []).map((d) => String(d.fileId)));
-    for (const fid of input.driverLicenseFileIds) {
-      if (!existing.has(fid)) {
-        vehicle.documents.push({ kind: "driver_license", fileId: new Types.ObjectId(fid), uploadedAt: new Date() });
+    for (const item of incomingDocs) {
+      if (!existing.has(item.fid)) {
+        vehicle.documents.push({ kind: item.kind, fileId: new Types.ObjectId(item.fid), uploadedAt: new Date() });
       }
     }
   }

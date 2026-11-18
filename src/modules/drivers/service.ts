@@ -307,24 +307,22 @@ export async function assignDriver(
       [{ vehicleId: vehicle._id, driverId: driver._id, startDate: input.date, endDate: null }],
       { session, ordered: true },
     );
-    if (vehicleAssignment) {
-      await Handover.create(
-        [
-          {
-            assignmentId: created[0]._id,
-            vehicleId: vehicle._id,
-            fromDriverId: vehicleAssignment.driverId,
-            toDriverId: driver._id,
-            date: input.date,
-            odometerKm: input.odometerKm,
-            fuelLevel: input.fuelLevel,
-            notes: input.notes,
-            fileIds: (input.fileIds ?? []).map((id) => new Types.ObjectId(id)),
-          },
-        ],
-        { session, ordered: true },
-      );
-    }
+    await Handover.create(
+      [
+        {
+          assignmentId: created[0]._id,
+          vehicleId: vehicle._id,
+          ...(vehicleAssignment ? { fromDriverId: vehicleAssignment.driverId } : {}),
+          toDriverId: driver._id,
+          date: input.date,
+          odometerKm: input.odometerKm,
+          fuelLevel: input.fuelLevel,
+          notes: input.notes,
+          fileIds: (input.fileIds ?? []).map((id) => new Types.ObjectId(id)),
+        },
+      ],
+      { session, ordered: true },
+    );
     vehicle.currentDriverId = driver._id;
     if (input.odometerKm > vehicle.odometerKm) vehicle.odometerKm = input.odometerKm;
     await vehicle.save({ session });
@@ -358,11 +356,24 @@ export async function listAssignments(vehicleId?: string, driverId?: string) {
 
 export async function listHandovers(vehicleId: string) {
   const rows = await Handover.find({ vehicleId }).sort({ date: -1 }).lean();
+  const driverIds = Array.from(
+    new Set(
+      rows
+        .flatMap((row) => [row.fromDriverId ? String(row.fromDriverId) : null, String(row.toDriverId)])
+        .filter((id): id is string => Boolean(id)),
+    ),
+  );
+  const drivers = driverIds.length > 0
+    ? await Driver.find({ _id: { $in: driverIds } }).select("name").lean()
+    : [];
+  const names = new Map(drivers.map((d) => [String(d._id), d.name]));
   return rows.map((row) => ({
     id: String(row._id),
     vehicleId: String(row.vehicleId),
     fromDriverId: row.fromDriverId ? String(row.fromDriverId) : null,
+    fromDriverName: row.fromDriverId ? (names.get(String(row.fromDriverId)) ?? null) : null,
     toDriverId: String(row.toDriverId),
+    toDriverName: names.get(String(row.toDriverId)) ?? null,
     date: dateDto(row.date),
     odometerKm: row.odometerKm,
     fuelLevel: row.fuelLevel ?? "",

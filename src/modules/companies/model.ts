@@ -27,7 +27,7 @@ const companySchema = new Schema(
     // Retained for backward compatibility
     plan: { type: String, default: "standard" },
     maxVehicles: { type: Number, default: 500 },
-    smsSenderName: { type: String, default: "VMS", maxlength: 11 },
+    smsSenderName: { type: String, default: "AxetPro", maxlength: 11 },
     smsCredits: { type: Number, default: 0, min: 0 },
     driverPasswordLogin: { type: Boolean, default: false },
   },

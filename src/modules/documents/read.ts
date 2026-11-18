@@ -88,7 +88,7 @@ export async function readVehicleDocument(
   try {
     text = await documentText(file.buffer, detected);
   } catch (error) {
-    logger.error({ message: error instanceof Error ? error.message : "document read failed" }, "Document OCR failed");
+    logger.error({ message: error instanceof Error ? error.message : "document read failed" }, "Document scan failed");
     text = "";
   }
   const fields: IstimaraFields | InsuranceFields | DriverLicenseFields =
@@ -104,7 +104,7 @@ export async function readVehicleDocument(
     fields,
     found,
     notice: found
-      ? "OCR complete: Check the extracted fields below. You can edit or correct any field manually before saving."
-      : "OCR could not extract all fields automatically. Please enter or complete the details manually below.",
+      ? "Scan complete: Check the extracted fields below. You can edit or correct any field manually before saving."
+      : "Could not extract all fields automatically. Please enter or complete the details manually below.",
   };
 }

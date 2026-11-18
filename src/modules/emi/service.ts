@@ -136,7 +136,7 @@ export async function createPlan(input: {
       { session, ordered: true },
     );
     const planDoc = created[0];
-    await EmiInstallment.create(
+    await EmiInstallment.insertMany(
       amounts.map((amountHalalas, index) => {
         const dueDate = dates[index];
         const isPaid = riyadhDateKey(dueDate) <= todayKey;
@@ -150,7 +150,7 @@ export async function createPlan(input: {
           paidDate: isPaid ? dueDate : undefined,
         };
       }),
-      { session, ordered: true },
+      { session },
     );
     return planDoc;
   });

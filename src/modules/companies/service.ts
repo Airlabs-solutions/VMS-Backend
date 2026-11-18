@@ -58,7 +58,7 @@ export function companyDto(company: any) {
     },
     plan: company.plan ?? "standard",
     maxVehicles: vehiclesLimit,
-    smsSenderName: company.smsSenderName ?? "VMS",
+    smsSenderName: company.smsSenderName ?? "AxetPro",
     smsCredits: credits,
     driverPasswordLogin: company.driverPasswordLogin ?? false,
     createdAt: company.createdAt,
@@ -120,7 +120,7 @@ export async function createCompany(input: {
     },
     plan: input.plan?.trim() || "standard",
     maxVehicles: initialVehicles,
-    smsSenderName: input.smsSenderName?.trim() || "VMS",
+    smsSenderName: input.smsSenderName?.trim() || "AxetPro",
     smsCredits: initialCredits,
     status: "active",
   });
